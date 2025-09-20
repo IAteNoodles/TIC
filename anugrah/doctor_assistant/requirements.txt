@@ -1,0 +1,7 @@
+# Core dependencies per project plan
+langgraph
+langchain
+streamlit
+requests
+pydantic
+typing-extensions

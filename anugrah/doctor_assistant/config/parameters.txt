@@ -1,0 +1,29 @@
+{
+  "cardiovascular_disease": {
+    "required_fields": [
+      "age",
+      "gender",
+      "height",
+      "weight",
+      "ap_hi",
+      "ap_lo",
+      "cholesterol",
+      "gluc",
+      "smoke",
+      "alco",
+      "active"
+    ]
+  },
+  "diabetes": {
+    "required_fields": [
+      "age",
+      "gender",
+      "hypertension",
+      "heart_disease",
+      "smoking_history",
+      "bmi",
+      "HbA1c_level",
+      "blood_glucose_level"
+    ]
+  }
+}
