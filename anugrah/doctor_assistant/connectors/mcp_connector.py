@@ -25,7 +25,7 @@ def call_mcp_model(prompt: str) -> dict:
     }
 
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=60)
+        response = requests.post(url, headers=headers, json=data, timeout=300)  # 5 minutes timeout for ML predictions
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
     except requests.exceptions.RequestException as e:
