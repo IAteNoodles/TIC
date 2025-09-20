@@ -522,6 +522,7 @@ async def get_patients_complete_details(patient_id: str = None):
                 logger.warning(f"Error closing Neo4j driver: {str(e)}")
 
 
+
 if __name__ == "__main__":
     import uvicorn
     import socket

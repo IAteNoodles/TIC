@@ -5,12 +5,73 @@ import time
 from typing import Dict, Any
 
 mcp = FastMCP("TIC")
+def _to_int(val: Any, default: int | None = None) -> int:
+    try:
+        return int(str(val).strip())
+    except Exception:
+        if default is not None:
+            return default
+        raise ValueError(f"Expected integer, got {val!r}")
 
 
-@mcp.tool("say_hello")
-def say_hello(name: str) -> str:
-    """A simple function to say hello."""
-    return f"Hello, {name}!"
+def _to_float(val: Any, default: float | None = None) -> float:
+    try:
+        return float(str(val).strip())
+    except Exception:
+        if default is not None:
+            return default
+        raise ValueError(f"Expected float, got {val!r}")
+
+
+def _to_flag(val: Any, default: int | None = None) -> int:
+    s = str(val).strip().lower()
+    truthy = {"1", "true", "yes", "y", "on"}
+    falsy = {"0", "false", "no", "n", "off"}
+    if s in truthy:
+        return 1
+    if s in falsy:
+        return 0
+    try:
+        i = int(s)
+        if i in (0, 1):
+            return i
+    except Exception:
+        pass
+    if default is not None:
+        return default
+    raise ValueError(f"Expected 0/1 boolean-like value, got {val!r}")
+
+
+def _normalize_gender(val: Any) -> int:
+    s = str(val).strip().lower()
+    if s in ("male", "m", "1"):
+        return 1
+    if s in ("female", "f", "0"):
+        return 0
+    # try numeric
+    try:
+        i = int(s)
+        if i in (0, 1):
+            return i
+    except Exception:
+        pass
+    raise ValueError("gender must be one of: 'Male','Female','M','F','1','0'")
+
+
+def _normalize_smoking_history(val: Any) -> str:
+    # Allow variety but return a canonical lowercase token
+    s = str(val).strip().lower()
+    aliases = {
+        "never": {"never", "no", "none", "n"},
+        "current": {"current", "yes", "y", "now"},
+        "former": {"former", "past", "quit", "ex"},
+        "ever": {"ever"},
+        "not current": {"not current", "not_current"},
+    }
+    for canon, aset in aliases.items():
+        if s in aset:
+            return canon
+    return s  # fallback to provided token
 
 
 def _post_json(url: str, payload: Dict[str, Any], timeout: int = 30) -> Dict[str, Any]:
@@ -50,58 +111,74 @@ def _post_json(url: str, payload: Dict[str, Any], timeout: int = 30) -> Dict[str
 
 @mcp.tool("call_cardio_api")
 def call_cardio_api(
-    age: int,
-    gender: int,
-    height: int,
-    weight: int,
-    ap_hi: int,
-    ap_lo: int,
-    cholesterol: int,
-    gluc: int,
-    smoke: int,
-    alco: int,
-    active: int,
+    age: str,
+    gender: str,
+    height: str,
+    weight: str,
+    ap_hi: str,
+    ap_lo: str,
+    cholesterol: str,
+    gluc: str,
+    smoke: str,
+    alco: str,
+    active: str,
 ) -> Dict[str, Any]:
-    """Call the cardiovascular model prediction endpoint using explicit args.
+    """Call the cardiovascular prediction API with explicit arguments.
 
-    Accepts each expected cardiovascular input as a separate argument
-    (rather than a single payload dict). The function constructs the
-    payload internally, posts it to the cardio service at
-    ``http://localhost:5002/predict`` and returns the response along with
-    timing information.
+    Accepts each expected cardiovascular input separately. Builds the
+    payload and posts to ``http://localhost:5002/predict``. The underlying
+    API expects ``gender`` as 0 (female) or 1 (male), but this tool accepts
+    a human-friendly string and coerces it.
 
     Args:
-        age (int): Age in years.
-        gender (str): Male or Female (API contract dependent).
-        height (int): Height in cm.
-        weight (int): Weight in kg.
-        ap_hi (int): Systolic blood pressure (mmHg).
-        ap_lo (int): Diastolic blood pressure (mmHg).
-        cholesterol (int): Cholesterol category (1,2,3).
-        gluc (int): Glucose category (1,2,3).
-        smoke (int): Smoking flag (0/1).
-        alco (int): Alcohol flag (0/1).
-        active (int): Physical activity flag (0/1).
+        age (int): Age in years (accepts strings; coerced to int).
+        gender (str): Gender string. Accepted values (case-insensitive):
+            - "Male", "M", "1" -> 1
+            - "Female", "F", "0" -> 0
+            Also accepts numeric strings like "0"/"1".
+        height (int): Height in cm (accepts strings; coerced to int).
+        weight (int): Weight in kg (accepts strings; coerced to int).
+        ap_hi (int): Systolic blood pressure (mmHg) (accepts strings; coerced to int).
+        ap_lo (int): Diastolic blood pressure (mmHg) (accepts strings; coerced to int).
+        cholesterol (int): Cholesterol category 1/2/3 (accepts strings; coerced to int).
+        gluc (int): Glucose category 1/2/3 (accepts strings; coerced to int).
+        smoke (int): Smoking flag 0/1 (accepts strings/yes/no/true/false; coerced to int 0/1).
+        alco (int): Alcohol flag 0/1 (accepts strings/yes/no/true/false; coerced to int 0/1).
+        active (int): Physical activity 0/1 (accepts strings/yes/no/true/false; coerced to int 0/1).
 
     Returns:
-        Dict[str, Any]: Result dictionary returned by ``_post_json``.
+        Dict[str, Any]: Minimal response with ``prediction`` and optional
+        ``explanations`` if provided by the service.
 
     Raises:
+        ValueError: If ``gender`` cannot be coerced to 0/1.
         requests.exceptions.RequestException: If the POST fails.
     """
+    # Coerce inputs permissively
+    age_i = _to_int(age)
+    gender_int = _normalize_gender(gender)
+    height_i = _to_int(height)
+    weight_i = _to_int(weight)
+    ap_hi_i = _to_int(ap_hi)
+    ap_lo_i = _to_int(ap_lo)
+    cholesterol_i = _to_int(cholesterol)
+    gluc_i = _to_int(gluc)
+    smoke_i = _to_flag(smoke)
+    alco_i = _to_flag(alco)
+    active_i = _to_flag(active)
     url = "http://localhost:5002/predict"
     payload = {
-        "age": age,
-        "gender": 1 if gender == "Male" else 0,
-        "height": height,
-        "weight": weight,
-        "ap_hi": ap_hi,
-        "ap_lo": ap_lo,
-        "cholesterol": cholesterol,
-        "gluc": gluc,
-        "smoke": smoke,
-        "alco": alco,
-        "active": active,
+        "age": age_i,
+        "gender": gender_int,
+        "height": height_i,
+        "weight": weight_i,
+        "ap_hi": ap_hi_i,
+        "ap_lo": ap_lo_i,
+        "cholesterol": cholesterol_i,
+        "gluc": gluc_i,
+        "smoke": smoke_i,
+        "alco": alco_i,
+        "active": active_i,
     }
     result = _post_json(url, payload)
     # Extract only prediction and explanations to avoid leaking internals
@@ -116,14 +193,14 @@ def call_cardio_api(
 
 @mcp.tool("call_diabetes_api")
 def call_diabetes_api(
-    age: int,
+    age: str,
     gender: str,
-    hypertension: int,
-    heart_disease: int,
+    hypertension: str,
+    heart_disease: str,
     smoking_history: str,
-    bmi: float,
-    HbA1c_level: float,
-    blood_glucose_level: int,
+    bmi: str,
+    HbA1c_level: str,
+    blood_glucose_level: str,
 ) -> Dict[str, Any]:
     """Call the diabetes model prediction endpoint using explicit args.
 
@@ -132,14 +209,14 @@ def call_diabetes_api(
     ``http://localhost:5003/predict`` returning the response plus timing.
 
     Args:
-        age (int): Age in years.
+        age (int): Age in years (accepts strings; coerced to int).
         gender (str): Gender string (e.g., "Male", "Female", "Other").
-        hypertension (int): Hypertension flag (0/1).
-        heart_disease (int): Heart disease flag (0/1).
-        smoking_history (str): Smoking history descriptor.
-        bmi (float): Body Mass Index.
-        HbA1c_level (float): HbA1c percentage.
-        blood_glucose_level (int): Blood glucose in mg/dL.
+        hypertension (int): Hypertension flag 0/1 (accepts strings/yes/no/true/false; coerced to 0/1).
+        heart_disease (int): Heart disease flag 0/1 (accepts strings/yes/no/true/false; coerced to 0/1).
+        smoking_history (str): Smoking history descriptor (canonicalized to lowercase token like "never", "current", "former", "ever").
+        bmi (float): Body Mass Index (accepts strings; coerced to float).
+        HbA1c_level (float): HbA1c percentage (accepts strings; coerced to float).
+        blood_glucose_level (int): Blood glucose in mg/dL (accepts strings; coerced to int).
 
     Returns:
         Dict[str, Any]: Result dictionary returned by ``_post_json``.
@@ -149,14 +226,14 @@ def call_diabetes_api(
     """
     url = "http://localhost:5003/predict"
     payload = {
-        "age": age,
+        "age": _to_int(age),
         "gender": gender,
-        "hypertension": hypertension,
-        "heart_disease": heart_disease,
-        "smoking_history": smoking_history,
-        "bmi": bmi,
-        "HbA1c_level": HbA1c_level,
-        "blood_glucose_level": blood_glucose_level,
+        "hypertension": _to_flag(hypertension),
+        "heart_disease": _to_flag(heart_disease),
+        "smoking_history": _normalize_smoking_history(smoking_history),
+        "bmi": _to_float(bmi),
+        "HbA1c_level": _to_float(HbA1c_level),
+        "blood_glucose_level": _to_int(blood_glucose_level),
     }
     result = _post_json(url, payload)
     # Extract only prediction and explanations
@@ -167,71 +244,6 @@ def call_diabetes_api(
     if isinstance(body, dict) and "explanations" in body:
         minimal["explanations"] = body.get("explanations")
     return minimal
-
-
-@mcp.tool("get_predictions")
-def get_predictions(
-    # Cardiovascular args
-    age: int,
-    gender: int,
-    height: int,
-    weight: int,
-    ap_hi: int,
-    ap_lo: int,
-    cholesterol: int,
-    gluc: int,
-    smoke: int,
-    alco: int,
-    active: int,
-    # Diabetes args
-    d_age: int,
-    d_gender: str,
-    hypertension: int,
-    heart_disease: int,
-    smoking_history: str,
-    bmi: float,
-    HbA1c_level: float,
-    blood_glucose_level: int,
-) -> Dict[str, Any]:
-    """Call both APIs using explicit, separate arguments for each field.
-
-    This convenience tool accepts each field required by the cardiovascular
-    and diabetes prediction endpoints as individual function arguments.
-    It forwards the cardiovascular-related arguments to
-    ``call_cardio_api`` and the diabetes-related arguments to
-    ``call_diabetes_api`` and returns both responses.
-
-    Returns a dictionary with keys ``"cardio"`` and ``"diabetes"`` that
-    contain the respective response dictionaries.
-    """
-    cardio_res = call_cardio_api(
-        age=age,
-        gender=gender,
-        height=height,
-        weight=weight,
-        ap_hi=ap_hi,
-        ap_lo=ap_lo,
-        cholesterol=cholesterol,
-        gluc=gluc,
-        smoke=smoke,
-        alco=alco,
-        active=active,
-    )
-
-    diabetes_res = call_diabetes_api(
-        age=d_age,
-        gender=d_gender,
-        hypertension=hypertension,
-        heart_disease=heart_disease,
-        smoking_history=smoking_history,
-        bmi=bmi,
-        HbA1c_level=HbA1c_level,
-        blood_glucose_level=blood_glucose_level,
-    )
-
-    # Both helpers already return minimal payloads (prediction + explanations)
-    return {"cardio": cardio_res, "diabetes": diabetes_res}
-
 
 if __name__ == "__main__":
     host = "0.0.0.0"

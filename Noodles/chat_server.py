@@ -250,7 +250,7 @@ def get_llm(name: str):
             raise RuntimeError("ChatGroq (langchain_groq) not installed")
         return ChatGroq(model=model_name, temperature=0)
     if name == "ollama":
-        model_name = os.getenv("model_local") or "amsaravi/medgemma-4b-it:q6"
+        model_name = os.getenv("model_local") or "llama3-groq-tool-use:8b"
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
             # Use direct Ollama client for local
