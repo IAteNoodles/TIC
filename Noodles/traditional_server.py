@@ -415,6 +415,113 @@ async def extract_data_from_pdf_improved(file: UploadFile = File(...)):
         return JSONResponse(status_code=500, content={"error": error_msg})
 
 
+
+@app.get("/get_patient_complete_details")
+async def get_patients_complete_details(patient_id: str = None):
+    """
+    Fetch complete patient details from the Neo4j database.
+    
+    Args:
+        patient_id (str, optional): Specific patient ID to filter results. If None, fetch
+
+    Returns:
+        dict: Patient details or an error message.
+    
+    """
+    logger.info("Fetching complete patient details")
+    driver = None
+    try:
+        driver = get_neo4j_driver()
+        verify_neo4j_connection(driver)
+
+        # Fetch personal details
+        if patient_id:
+            personal_query = """
+            MATCH (p:Patient {{patient_id: {patient_id}}})
+            RETURN p
+            """.format(patient_id=patient_id)
+            personal_result = driver.execute_query(personal_query)
+        else:
+            personal_query = """
+            MATCH (p:Patient)
+            RETURN p
+            LIMIT 100
+            """
+            personal_result = driver.execute_query(personal_query)
+        
+        personal_records = [dict(record) for record in personal_result.records]
+        
+        # Fetch lab details
+        if patient_id:
+            lab_query = """
+            MATCH (p:Patient {{patient_id: {patient_id}}})-[:HAS_HEALTH_VALUES]->(hv:LabValues)
+            RETURN hv
+            """.format(patient_id=patient_id)
+            lab_result = driver.execute_query(lab_query)
+        else:
+            lab_query = """
+            MATCH (p:Patient)-[:HAS_HEALTH_VALUES]->(hv:LabValues)
+            RETURN hv
+            """
+            lab_result = driver.execute_query(lab_query)
+        
+        lab_records = [dict(record) for record in lab_result.records]
+        
+        # Combine personal and lab details
+        combined_results = []
+        for personal in personal_records:
+            # Get the patient node from the record
+            patient_node = personal.get('p')
+            if patient_node is None:
+                # If 'p' key doesn't exist, try to get the first value
+                patient_node = list(personal.values())[0] if personal else None
+            
+            # Serialize personal details properly
+            if patient_node:
+                try:
+                    personal_props = dict(patient_node)
+                except:
+                    personal_props = getattr(patient_node, "properties", None) or getattr(patient_node, "_properties", None) or {}
+            else:
+                personal_props = {}
+            
+            patient_data = {
+                "personal_details": serialize_neo4j_result(personal_props),
+                "lab_details": []
+            }
+            
+            # Add lab details for this patient
+            for lab in lab_records:
+                lab_node = lab.get('hv')
+                if lab_node:
+                    try:
+                        lab_props = dict(lab_node)
+                    except:
+                        lab_props = getattr(lab_node, "properties", None) or getattr(lab_node, "_properties", None) or {}
+                    patient_data["lab_details"].append(serialize_neo4j_result(lab_props))
+            
+            combined_results.append(patient_data)
+        
+        logger.info(f"Fetched {len(combined_results)} patient records with personal and lab details")
+        return {"status": "success", "patients": combined_results, "count": len(combined_results)}
+    
+    except HTTPException:
+        raise
+    
+    except Exception as e:
+        error_msg = f"Error fetching patient details: {str(e)}"
+        logger.error(error_msg)
+        return JSONResponse(status_code=500, content={"error": error_msg})
+    
+    finally:
+        if driver:
+            try:
+                driver.close()
+                logger.info("Neo4j driver closed")
+            except Exception as e:
+                logger.warning(f"Error closing Neo4j driver: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     import socket

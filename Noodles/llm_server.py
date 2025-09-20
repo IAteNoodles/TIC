@@ -72,7 +72,7 @@ def call_cardio_api(
 
     Args:
         age (int): Age in years.
-        gender (int): 1 for male, 0 for female (API contract dependent).
+        gender (str): Male or Female (API contract dependent).
         height (int): Height in cm.
         weight (int): Weight in kg.
         ap_hi (int): Systolic blood pressure (mmHg).
@@ -92,7 +92,7 @@ def call_cardio_api(
     url = "http://localhost:5002/predict"
     payload = {
         "age": age,
-        "gender": gender,
+        "gender": 1 if gender == "Male" else 0,
         "height": height,
         "weight": weight,
         "ap_hi": ap_hi,
