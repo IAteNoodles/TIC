@@ -1,5 +1,8 @@
 import requests
 import json
+from logging_config import get_logger
+
+logger = get_logger("connectors.mcp")
 
 def call_mcp_model(prompt: str) -> dict:
     """
@@ -26,7 +29,7 @@ def call_mcp_model(prompt: str) -> dict:
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error calling MCP model: {e}")
+        logger.error("Error calling MCP model: %s", e)
         return {"error": str(e)}
 
 if __name__ == '__main__':

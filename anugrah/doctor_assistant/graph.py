@@ -5,14 +5,16 @@ from agents.intent_agent import intent_agent_node
 from agents.diagnosis_agent import diagnosis_agent_node
 from tools.backend_tool import get_patient_data_tool
 from state import GraphState
-import re
+from logging_config import get_logger
+
+logger = get_logger("graph")
 
 # Updated Information Retrieval Node
 def information_retrieval_node(state: GraphState):
     """
     Fetches patient data using the backend tool and summarizes it.
     """
-    print("---INFORMATION RETRIEVAL NODE---")
+    logger.info("Information retrieval node")
     patient_id = state.get('patient_id')
 
     if not patient_id:
@@ -73,36 +75,11 @@ workflow.add_conditional_edges(
 workflow.add_edge("information_retrieval", END)
 workflow.add_edge("diagnosis", END)
 
-# Compile the graph
 app = workflow.compile()
 
 if __name__ == '__main__':
-    # Example for information retrieval
-    inputs_retrieval = {"query": "Get me patient data.", "patient_id": "123"}
-    print("\n---RUNNING INFORMATION RETRIEVAL---")
-    for output in app.stream(inputs_retrieval):
-        for key, value in output.items():
-            print(f"Node: {key}, Output: {value}")
-
-    # Example for diagnosis with sufficient data
-    inputs_diagnosis_sufficient = {"query": "Generate a diagnosis.", "patient_id": "123"}
-    print("\n---RUNNING DIAGNOSIS (SUFFICIENT DATA)---")
-    for output in app.stream(inputs_diagnosis_sufficient):
-        for key, value in output.items():
-            print(f"Node: {key}, Output: {value}")
-
-    # Example for diagnosis with insufficient data (creating a dummy patient for this)
-    from connectors.backend_connector import dummy_patients
-    dummy_patients["789"] = {
-            "name": "Test Patient",
-            "age": 50,
-            "gender": "Male",
-            "symptoms": [], # Missing symptoms
-            "vitals": {} # Missing vitals
-        }
-    inputs_diagnosis_insufficient = {"query": "Generate a diagnosis.", "patient_id": "789"}
-    print("\n---RUNNING DIAGNOSIS (INSUFFICIENT DATA)---")
-    for output in app.stream(inputs_diagnosis_insufficient):
-        for key, value in output.items():
-            print(f"Node: {key}, Output: {value}")
+    # Simple smoke test
+    inputs = {"query": "Get me patient data.", "patient_id": "123"}
+    for _ in app.stream(inputs):
+        pass
 

@@ -1,0 +1,18 @@
+[project]
+name = "doctor_assistant"
+version = "0.1.0"
+description = "A multi-agent AI assistant for doctors."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agents*", "connectors*", "tools*", "frontend*"]
+exclude = ["tests*"]
+
+[tool.setuptools]
+py-modules = ["graph", "state", "logging_config", "main"]

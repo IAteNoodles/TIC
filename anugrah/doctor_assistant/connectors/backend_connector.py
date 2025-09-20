@@ -1,4 +1,10 @@
 import json
+try:
+    from doctor_assistant.logging_config import get_logger
+except ImportError:
+    from logging_config import get_logger
+
+logger = get_logger("connectors.backend")
 
 # Dummy data representing a database of patients
 dummy_patients = {
@@ -75,6 +81,7 @@ def get_patient_data_mock(patient_id: str) -> dict:
     if patient_id in dummy_patients:
         return dummy_patients[patient_id]
     else:
+        logger.warning("Patient id %s not found in dummy backend", patient_id)
         return {"error": "Patient not found"}
 
 if __name__ == '__main__':

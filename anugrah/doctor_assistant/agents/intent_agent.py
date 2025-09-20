@@ -1,11 +1,14 @@
 from state import GraphState
 from connectors.llm_connector import call_llm
+from logging_config import get_logger
+
+logger = get_logger("agents.intent")
 
 def intent_agent_node(state: GraphState):
     """
     Classifies the user's intent using an LLM.
     """
-    print("---INTENT AGENT (LLM)---")
+    logger.info("Classifying intent")
     query = state['query']
 
     system_prompt = """
@@ -28,14 +31,14 @@ def intent_agent_node(state: GraphState):
 
     intent = "information_retrieval" # Default value
     if "error" in response:
-        print(f"LLM call failed, defaulting to: {intent}")
+        logger.warning("LLM call failed, defaulting to %s", intent)
     elif "choices" in response and response["choices"]:
         llm_response = response['choices'][0]['message']['content'].strip().lower()
         # Basic validation to ensure the LLM gives a valid response
         if llm_response in ["information_retrieval", "diagnosis"]:
             intent = llm_response
     
-    print(f"LLM Classified Intent: {intent}")
+    logger.info("Classified intent: %s", intent)
     state['intent'] = intent
     return state
 

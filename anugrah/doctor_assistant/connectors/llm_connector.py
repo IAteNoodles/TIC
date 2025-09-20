@@ -1,7 +1,10 @@
 import requests
 import json
+from logging_config import get_logger
 
-def call_llm(model_name: str, endpoint: str, system_prompt: str, user_prompt: str) -> dict:
+logger = get_logger("connectors.llm")
+
+def call_llm(model_name: str, endpoint: str, system_prompt: str, user_prompt: str, timeout: int = 30) -> dict:
     """
     Calls a large language model endpoint.
 
@@ -10,6 +13,7 @@ def call_llm(model_name: str, endpoint: str, system_prompt: str, user_prompt: st
         endpoint: The URL of the model's API endpoint.
         system_prompt: The system message to set the context for the model.
         user_prompt: The user's message to the model.
+        timeout: Timeout in seconds for the request (default: 30).
 
     Returns:
         A dictionary containing the model's response or an error.
@@ -29,11 +33,11 @@ def call_llm(model_name: str, endpoint: str, system_prompt: str, user_prompt: st
     }
 
     try:
-        response = requests.post(endpoint, headers=headers, data=json.dumps(data))
+        response = requests.post(endpoint, headers=headers, data=json.dumps(data), timeout=timeout)
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error calling LLM at {endpoint}: {e}")
+        logger.error("Error calling LLM at %s: %s", endpoint, e)
         return {"error": f"Failed to connect to the language model at {endpoint}."}
 
 if __name__ == '__main__':

@@ -1,16 +1,22 @@
 import os
 import json
+try:
+    from doctor_assistant.logging_config import get_logger
+except ImportError:
+    from logging_config import get_logger
+
+logger = get_logger("tools.parameters")
 
 def get_model_parameters_tool() -> dict:
     """
     A tool for reading and parsing model parameters from the parameters.txt file.
     """
-    print("---PARAMETER TOOL: Reading model parameters---")
+    logger.info("Reading model parameters")
     
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'parameters.txt')
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'config', 'parameters.txt'))
     
     if not os.path.exists(config_path):
-        print(f"Warning: {config_path} not found.")
+        logger.warning("Parameter file not found at %s", config_path)
         return {"error": "Parameter file not found."}
     
     try:
@@ -18,10 +24,10 @@ def get_model_parameters_tool() -> dict:
             params = json.load(f)
         return params
     except json.JSONDecodeError:
-        print(f"Error: Could not decode JSON from {config_path}")
+        logger.error("Could not decode JSON from %s", config_path)
         return {"error": "Parameter file is not valid JSON."}
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.exception("Unexpected error reading parameter file")
         return {"error": "An unexpected error occurred while reading the parameter file."}
 
 if __name__ == '__main__':
