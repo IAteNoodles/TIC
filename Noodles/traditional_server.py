@@ -12,12 +12,20 @@ import httpx
 from neo4j import GraphDatabase
 from neo4j.time import Date, DateTime, Time, Duration
 from pydantic import BaseModel
+from typing import Optional, Union
+import uuid
 
 # Assuming these are defined elsewhere or add placeholders
 
 class CypherQueryRequest(BaseModel):
     cypher_query: str
 
+
+class SaveReportRequest(BaseModel):
+    report: str
+    patient_id: Optional[Union[str, int]] = None
+    # Accept alternative field name from clients
+    id: Optional[Union[str, int]] = None
 
 
 app = FastAPI()
@@ -237,6 +245,120 @@ def verify_neo4j_connection(driver):
         logger.error(f"Neo4j connectivity failed: {str(e)}")
         raise
 
+
+@app.post("/save_report")
+async def save_report(payload: SaveReportRequest):
+    """
+    Create a DiagnosticReport node with string `data` and link to a Patient.
+    - If `patient_id` not provided or patient doesn't exist, create a new Patient.
+    - Returns created/merged `patient_id` and `report_id`.
+    """
+    driver = None
+    try:
+        if not payload.report or not isinstance(payload.report, str):
+            raise HTTPException(status_code=400, detail="`report` must be a non-empty string")
+
+        driver = get_neo4j_driver()
+        verify_neo4j_connection(driver)
+
+        def _exec(tx, cypher, params=None):
+            res = tx.run(cypher, params or {})
+            return [r.data() for r in res]
+
+        # Determine or create patient id
+        # Accept both `patient_id` and `id` from payload
+        raw_pid = payload.patient_id if payload.patient_id is not None else payload.id
+        provided_pid_str = str(raw_pid).strip() if raw_pid is not None else ""
+        patient_id_to_use = provided_pid_str
+
+        with driver.session() as session:
+            if provided_pid_str:
+                # Try to interpret provided id as integer if numeric
+                pid_int = None
+                try:
+                    if isinstance(raw_pid, int):
+                        pid_int = raw_pid
+                    elif isinstance(provided_pid_str, str) and provided_pid_str.isdigit():
+                        pid_int = int(provided_pid_str)
+                except Exception:
+                    pid_int = None
+
+                # First attempt to find an existing patient with either numeric or string id
+                found = session.execute_read(
+                    lambda tx: _exec(
+                        tx,
+                        """
+                        MATCH (p:Patient)
+                        WHERE ($pid_int IS NOT NULL AND p.patient_id = $pid_int) OR p.patient_id = $pid_str
+                        RETURN p.patient_id AS patient_id
+                        LIMIT 1
+                        """,
+                        {"pid_int": pid_int, "pid_str": provided_pid_str},
+                    )
+                )
+
+                if found:
+                    patient_id_to_use = found[0]["patient_id"]
+                else:
+                    # Create patient using numeric type when possible, else string
+                    patient_id_value = pid_int if pid_int is not None else provided_pid_str
+                    created = session.execute_write(
+                        lambda tx: _exec(
+                            tx,
+                            """
+                            CREATE (p:Patient { patient_id: $patient_id, created_at: datetime() })
+                            RETURN p.patient_id AS patient_id
+                            """,
+                            {"patient_id": patient_id_value},
+                        )
+                    )
+                    patient_id_to_use = created[0]["patient_id"] if created else patient_id_value
+            else:
+                # Generate a new patient id (UUID string)
+                patient_id_to_use = str(uuid.uuid4())
+                session.execute_write(
+                    lambda tx: _exec(
+                        tx,
+                        """
+                        CREATE (p:Patient { patient_id: $patient_id, created_at: datetime() })
+                        RETURN p.patient_id AS patient_id
+                        """,
+                        {"patient_id": patient_id_to_use},
+                    )
+                )
+
+            # Create diagnostic report and link
+            report_id = str(uuid.uuid4())
+            create_res = session.execute_write(
+                lambda tx: _exec(
+                    tx,
+                    """
+                    MATCH (p:Patient { patient_id: $patient_id })
+                    CREATE (r:DiagnosticReport {
+                        report_id: $report_id,
+                        data: $data,
+                        created_at: datetime()
+                    })
+                    MERGE (p)-[:HAS_DIAGNOSTIC_REPORT]->(r)
+                    RETURN p.patient_id AS patient_id, r.report_id AS report_id
+                    """,
+                    {"patient_id": patient_id_to_use, "report_id": report_id, "data": payload.report},
+                )
+            )
+
+        return {"status": "success", "patient_id": patient_id_to_use, "report_id": report_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save report: {e}")
+    finally:
+        if driver:
+            try:
+                driver.close()
+            except Exception:
+                pass
+
 @app.post("/run_cypher_query")
 async def run_cypher_query(request: CypherQueryRequest):
     """
@@ -327,6 +449,99 @@ async def extract_data_from_image(file: UploadFile = File(...)):
             return JSONResponse(status_code=401, content={"error": "MISTRAL_API_KEY is invalid or expired. Please update it in your .env file."})
         return JSONResponse(status_code=500, content={"error": error_msg})
 
+
+@app.get("/get_all_diagnostic_reports")
+async def get_all_diagnostic_reports(patient_id: Union[int, str]):
+    """
+    Return list of all report_ids for a given patient.
+    Accepts numeric or string patient IDs and matches accordingly.
+    """
+    driver = None
+    try:
+        driver = get_neo4j_driver()
+        verify_neo4j_connection(driver)
+
+        def _exec(tx, cypher, params=None):
+            res = tx.run(cypher, params or {})
+            return [r.data() for r in res]
+
+        with driver.session() as session:
+            pid_str = str(patient_id)
+            pid_int = None
+            if isinstance(patient_id, int):
+                pid_int = patient_id
+            elif pid_str.isdigit():
+                pid_int = int(pid_str)
+
+            rows = session.execute_read(
+                lambda tx: _exec(
+                    tx,
+                    """
+                    MATCH (p:Patient)
+                    WHERE ($pid_int IS NOT NULL AND p.patient_id = $pid_int) OR p.patient_id = $pid_str
+                    MATCH (p)-[:HAS_DIAGNOSTIC_REPORT]->(r:DiagnosticReport)
+                    RETURN r.report_id AS report_id, r.created_at AS created_at
+                    ORDER BY created_at DESC
+                    """,
+                    {"pid_int": pid_int, "pid_str": pid_str},
+                )
+            )
+            report_ids = [row["report_id"] for row in rows]
+            return {"status": "success", "patient_id": patient_id, "report_ids": report_ids, "count": len(report_ids)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch diagnostic reports: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch diagnostic reports: {e}")
+    finally:
+        if driver:
+            try:
+                driver.close()
+            except Exception:
+                pass
+
+
+@app.get("/get_diagnostic_report")
+async def get_diagnostic_report(report_id: str):
+    """
+    Return the data and metadata for a DiagnosticReport by report_id.
+    """
+    driver = None
+    try:
+        driver = get_neo4j_driver()
+        verify_neo4j_connection(driver)
+
+        def _exec(tx, cypher, params=None):
+            res = tx.run(cypher, params or {})
+            return [r.data() for r in res]
+
+        with driver.session() as session:
+            rows = session.execute_read(
+                lambda tx: _exec(
+                    tx,
+                    """
+                    MATCH (r:DiagnosticReport { report_id: $report_id })
+                    OPTIONAL MATCH (p:Patient)-[:HAS_DIAGNOSTIC_REPORT]->(r)
+                    RETURN r.report_id AS report_id, r.data AS data, r.created_at AS created_at, p.patient_id AS patient_id
+                    LIMIT 1
+                    """,
+                    {"report_id": report_id},
+                )
+            )
+            if not rows:
+                raise HTTPException(status_code=404, detail="DiagnosticReport not found")
+            return {"status": "success", **serialize_neo4j_result(rows[0])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch diagnostic report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch diagnostic report: {e}")
+    finally:
+        if driver:
+            try:
+                driver.close()
+            except Exception:
+                pass
 
 # --- Improved OCR Endpoints with Better Error Handling ---
 
