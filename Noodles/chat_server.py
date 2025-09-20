@@ -205,23 +205,27 @@ async def call_mcp_tool(url: str, name: str, arguments: Dict[str, Any]) -> str:
     logger.info(f"Calling MCP tool '{name}' with args: {arguments}")
     async with Client(url) as client:
         result = await client.call_tool_mcp(name=name, arguments=arguments or {})
+        output: Optional[str] = None
         if result.structuredContent:
             try:
-                return json.dumps(result.structuredContent, ensure_ascii=False)
+                output = json.dumps(result.structuredContent, ensure_ascii=False)
             except Exception:
-                pass
-        # Fallback to first text content block
-        if result.content:
+                output = None
+        if output is None and result.content:
             try:
-                # result.content is List[ContentBlock]; try to extract text
                 for block in result.content:
                     text = getattr(block, "text", None)
                     if text:
-                        return str(text)
+                        output = str(text)
+                        break
             except Exception:
-                pass
-        # Generic string
-        return str(result)
+                output = None
+        if output is None:
+            output = str(result)
+        # Log tool output (truncated for readability)
+        _preview = (output[:800] + "…") if len(output) > 800 else output
+        logger.info(f"MCP tool '{name}' returned: {_preview}")
+        return output
 
 
 # -----------------
@@ -503,12 +507,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 steps, _ = await plan_tool_usage(llm, req.message, tools)
                 tool_calls: List[ToolCall] = []
                 # Execute steps sequentially
-                for step in steps:
+                for idx, step in enumerate(steps, start=1):
                     name = step.get("tool_name") or step.get("name")
                     args = step.get("arguments") or {}
                     if not name:
                         continue
                     try:
+                        logger.info(f"Executing tool step {idx}/{len(steps)}: {name} with args={args}")
                         result = await call_mcp_tool(mcp_url, name, args)
                         tool_calls.append(ToolCall(name=name, arguments=args, result=result))
                     except Exception as te:
