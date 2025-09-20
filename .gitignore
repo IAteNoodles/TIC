@@ -1,1 +1,67 @@
-Noodles/venv/
+# Python
+.*/venv/
+.*/env/
+.*/ENV/
+.*/Envs/
+.*/.env/
+
+# Node.js
+.*/node_modules/
+.*/.env.local/
+.*/.env.development/
+.*/.env.test/
+.*/.env.production/
+
+# Ruby
+.*/.bundle/
+.*/vendor/bundle/
+
+# PHP
+.*/vendor/
+
+# Java
+.*/.classpath/
+.*/.project/
+.*/.settings/
+.*/target/
+.*/bin/
+
+# .NET
+.*/packages/
+.*/obj/
+.*/bin/
+
+# General
+.*/.env/
+.*/env/
+.*/environment/
+.*/.venv/
+.*/.virtualenv/
+
+# Caches
+.*/__pycache__/
+.*/.cache/
+.*/cache/
+.*/.mypy_cache/
+.*/.pytest_cache/
+.*/.vscode/
+.*/.idea/
+.*/.DS_Store
+.*/Thumbs.db
+
+# Useless files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.orig
+
+# Env files
+.*/.env.*
+.*/env.*
+.*/environment.*
+
+
+.*/__pycache__/
+.*/.mypy_cache/

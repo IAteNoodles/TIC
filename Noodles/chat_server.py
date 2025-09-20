@@ -183,7 +183,7 @@ def get_mcp_url() -> str:
         return data["servers"]["TIC"]["url"]
     except Exception:
         # Final fallback to common default
-        return "http://127.0.0.1:8005/mcp"
+        return "http://0.0.0.0:8005/mcp"
 
 
 async def list_mcp_tools(url: str) -> List[Dict[str, Any]]:
@@ -246,7 +246,7 @@ def get_llm(name: str):
             raise RuntimeError("ChatGroq (langchain_groq) not installed")
         return ChatGroq(model=model_name, temperature=0)
     if name == "ollama":
-        model_name = os.getenv("model_local") or "llama3.1:8b-instruct-q4_K_M"
+        model_name = os.getenv("model_local") or "llama3-groq-tool-use:8b"
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
             # Use direct Ollama client for local
@@ -265,12 +265,17 @@ def get_llm(name: str):
 
 
 def build_tool_planner_prompt(tools: List[Dict[str, Any]]) -> str:
-    # Provide tool schema hints but keep concise
+    # Provide tool schema hints with multi-tool planning
     parts = [
-        "You may optionally call exactly one tool if required.",
-        "Decide and output ONLY a strict JSON object with keys:",
-        "{\"use_tool\": bool, \"tool_name\": string|null, \"arguments\": object|null, \"reason\": string}",
-        "If use_tool is true, ensure arguments match the tool's input schema.",
+        "Plan tool usage before answering. You may call zero, one, or multiple tools.",
+        "If multiple tools are needed, plan their order and arguments.",
+        "Respond with ONLY a single strict JSON object with keys:",
+        "{\"use_tools\": bool, \"tool_plan\": [ {\"tool_name\": string, \"arguments\": object} ], \"reason\": string}",
+        "Rules:",
+        "- If no tool is needed, return {\"use_tools\": false, \"tool_plan\": [], \"reason\": \"...\"}",
+        "- If tools are needed, include each step in order within tool_plan.",
+        "- Match each step's arguments to the tool's input schema.",
+        "- Return exactly ONE JSON object. No extra text. No multiple JSON objects.",
         "Available tools:"
     ]
     for t in tools[:8]:
@@ -280,11 +285,151 @@ def build_tool_planner_prompt(tools: List[Dict[str, Any]]) -> str:
         props = list((schema.get("properties") or {}).keys())
         required = schema.get("required") or []
         parts.append(f"- {name}: {desc} | properties={props} required={required}")
-    parts.append("Respond with JSON only. No extra text.")
+    parts.append("Respond with JSON only. No code fences.")
     return "\n".join(parts)
 
 
-async def plan_tool_usage(llm, user_message: str, tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str], Dict[str, Any], str]:
+def _clean_json_like(raw: str) -> str:
+    cleaned = raw.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
+def _extract_json_objects(text: str) -> List[str]:
+    # Extract one or more top-level JSON objects or arrays from text
+    objs: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        # find start of object/array
+        while i < n and text[i] not in '{[':
+            i += 1
+        if i >= n:
+            break
+        start = i
+        stack = [text[i]]
+        i += 1
+        in_str = False
+        esc = False
+        while i < n and stack:
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in '{[':
+                    stack.append(ch)
+                elif ch in '}]':
+                    if stack:
+                        top = stack[-1]
+                        if (top == '{' and ch == '}') or (top == '[' and ch == ']'):
+                            stack.pop()
+                        else:
+                            # mismatched, break
+                            stack = []
+                            break
+            i += 1
+        end = i
+        if end > start:
+            objs.append(text[start:end].strip())
+    return objs
+
+
+def _parse_tool_plan_text(cleaned_raw: str) -> Tuple[List[Dict[str, Any]], str]:
+    # Try direct JSON load
+    try:
+        data = json.loads(cleaned_raw)
+    except Exception:
+        # Try multiple JSON objects concatenated
+        parts = _extract_json_objects(cleaned_raw)
+        steps: List[Dict[str, Any]] = []
+        reason = ""
+        for p in parts:
+            try:
+                obj = json.loads(p)
+                if isinstance(obj, dict):
+                    # Legacy single-tool format
+                    if "tool_name" in obj or "use_tool" in obj:
+                        if obj.get("use_tool") and obj.get("tool_name"):
+                            steps.append({
+                                "tool_name": obj.get("tool_name"),
+                                "arguments": obj.get("arguments") or {},
+                            })
+                        reason = str(obj.get("reason", reason))
+                    # New format with plan list
+                    for key in ("tool_plan", "steps", "calls", "tools"):
+                        if isinstance(obj.get(key), list):
+                            for s in obj[key]:
+                                name = s.get("tool_name") or s.get("name")
+                                if name:
+                                    steps.append({
+                                        "tool_name": name,
+                                        "arguments": s.get("arguments") or {},
+                                    })
+                            reason = str(obj.get("reason", reason))
+                elif isinstance(obj, list):
+                    for s in obj:
+                        name = s.get("tool_name") or s.get("name")
+                        if name:
+                            steps.append({
+                                "tool_name": name,
+                                "arguments": s.get("arguments") or {},
+                            })
+            except Exception:
+                continue
+        return steps, reason
+    else:
+        steps: List[Dict[str, Any]] = []
+        reason = ""
+        if isinstance(data, dict):
+            # New multi-tool schema
+            if isinstance(data.get("tool_plan"), list):
+                for s in data["tool_plan"]:
+                    name = s.get("tool_name") or s.get("name")
+                    if name:
+                        steps.append({"tool_name": name, "arguments": s.get("arguments") or {}})
+                reason = str(data.get("reason", ""))
+            # Legacy single-tool schema
+            elif "use_tool" in data:
+                if data.get("use_tool") and data.get("tool_name"):
+                    steps.append({
+                        "tool_name": data.get("tool_name"),
+                        "arguments": data.get("arguments") or {},
+                    })
+                reason = str(data.get("reason", ""))
+            # Other alias keys
+            else:
+                for key in ("steps", "calls", "tools"):
+                    if isinstance(data.get(key), list):
+                        for s in data[key]:
+                            name = s.get("tool_name") or s.get("name")
+                            if name:
+                                steps.append({
+                                    "tool_name": name,
+                                    "arguments": s.get("arguments") or {},
+                                })
+                        reason = str(data.get("reason", ""))
+                        break
+        elif isinstance(data, list):
+            for s in data:
+                name = s.get("tool_name") or s.get("name")
+                if name:
+                    steps.append({"tool_name": name, "arguments": s.get("arguments") or {}})
+        return steps, reason
+
+
+async def plan_tool_usage(llm, user_message: str, tools: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
     system = build_tool_planner_prompt(tools)
     logger.info("Requesting tool plan from LLM")
     msg = llm.invoke([
@@ -292,41 +437,26 @@ async def plan_tool_usage(llm, user_message: str, tools: List[Dict[str, Any]]) -
         HumanMessage(content=user_message),
     ])
     raw = getattr(msg, "content", "")
-    
-    # Clean up markdown code blocks if present
-    cleaned_raw = raw.strip()
-    if cleaned_raw.startswith("```json"):
-        cleaned_raw = cleaned_raw[7:]  # Remove ```json
-    if cleaned_raw.startswith("```"):
-        cleaned_raw = cleaned_raw[3:]   # Remove ```
-    if cleaned_raw.endswith("```"):
-        cleaned_raw = cleaned_raw[:-3]  # Remove trailing ```
-    cleaned_raw = cleaned_raw.strip()
-    
-    try:
-        data = json.loads(cleaned_raw)
-        use_tool = bool(data.get("use_tool"))
-        tool_name = data.get("tool_name") if use_tool else None
-        arguments = data.get("arguments") if isinstance(data.get("arguments"), dict) else {}
-        reason = str(data.get("reason", ""))
-        logger.info(f"Planner response -> use_tool={use_tool} tool={tool_name}")
-        return use_tool, tool_name, arguments, reason
-    except Exception as e:
-        logger.error(f"Failed to parse planner JSON: {e}; raw={raw!r}")
-        raise
+    cleaned_raw = _clean_json_like(raw)
+    steps, reason = _parse_tool_plan_text(cleaned_raw)
+    if steps:
+        logger.info(f"Planner response -> steps={len(steps)}")
+    else:
+        logger.info("Planner response -> no tool needed or unparseable; proceeding without tools")
+    return steps, reason
 
 
-async def final_answer(llm, user_message: str, tool_name: Optional[str], tool_args: Dict[str, Any], tool_result: Optional[str]) -> str:
+async def final_answer(llm, user_message: str, tool_calls: List[ToolCall]) -> str:
     system = (
-        "You are a helpful assistant. If a tool result is provided, use it to answer succinctly."
+        "You are a helpful assistant. If tool results are provided, use them to answer succinctly."
     )
-    context_parts = []
-    if tool_name:
-        context_parts.append(f"Tool used: {tool_name}")
-        context_parts.append(f"Arguments: {json.dumps(tool_args, ensure_ascii=False)}")
-    if tool_result is not None:
-        context_parts.append(f"Tool result: {tool_result}")
-    context = "\n".join(context_parts)
+    context_lines: List[str] = []
+    for i, tc in enumerate(tool_calls, start=1):
+        context_lines.append(f"Tool {i}: {tc.name}")
+        context_lines.append(f"Arguments: {json.dumps(tc.arguments, ensure_ascii=False)}")
+        if tc.result is not None:
+            context_lines.append(f"Result: {tc.result}")
+    context = "\n".join(context_lines)
     logger.info("Requesting final answer from LLM")
     msg = llm.invoke([
         SystemMessage(content=system),
@@ -369,22 +499,26 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 llm = get_llm(provider)
                 tools = await list_mcp_tools(mcp_url)
 
-                # Plan tool usage
-                use_tool, tool_name, tool_args, _ = await plan_tool_usage(llm, req.message, tools)
+                # Plan tool usage (multi-step supported)
+                steps, _ = await plan_tool_usage(llm, req.message, tools)
                 tool_calls: List[ToolCall] = []
-                tool_result: Optional[str] = None
-
-                if use_tool and tool_name:
+                # Execute steps sequentially
+                for step in steps:
+                    name = step.get("tool_name") or step.get("name")
+                    args = step.get("arguments") or {}
+                    if not name:
+                        continue
                     try:
-                        tool_result = await call_mcp_tool(mcp_url, tool_name, tool_args)
-                        tool_calls.append(ToolCall(name=tool_name, arguments=tool_args, result=tool_result))
+                        result = await call_mcp_tool(mcp_url, name, args)
+                        tool_calls.append(ToolCall(name=name, arguments=args, result=result))
                     except Exception as te:
                         logger.error(f"Tool execution failed: {te}")
-                        # Retry the same provider
-                        continue
+                        # Stop executing further tools for this attempt
+                        tool_calls.append(ToolCall(name=name, arguments=args, result=None))
+                        break
 
                 # Get final answer
-                answer = await final_answer(llm, req.message, tool_name, tool_args, tool_result)
+                answer = await final_answer(llm, req.message, tool_calls)
                 if not answer:
                     logger.warning("Empty answer from model; retrying provider")
                     continue
@@ -419,8 +553,19 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 if __name__ == "__main__":
     import uvicorn
+    import socket
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8088"))
-    logger.info(f"Starting API at http://{host}:{port}")
+
+    # Get local IP address for network access
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = "localhost"
+
+    logger.info(f"Starting API at http://{host}:{port} (network: http://{local_ip}:{port})")
     uvicorn.run("chat_server:app", host=host, port=port, reload=True, log_level="info")
