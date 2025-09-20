@@ -40,6 +40,39 @@ def _transform_patient_data_for_mcp(patient_data: dict, model_type: str) -> dict
         if 'age' in transformed_data:
             transformed_data['d_age'] = transformed_data['age']
             # Keep the original 'age' field as well for backward compatibility
+        
+        # Map gender to string format for diabetes model
+        if 'gender' in transformed_data:
+            gender_val = transformed_data['gender']
+            transformed_data['d_gender'] = "Male" if gender_val == 1 else "Female"
+        
+        # Map smoking status to string
+        if 'smoke' in transformed_data:
+            smoke_val = transformed_data['smoke']
+            transformed_data['smoking_history'] = "current" if smoke_val == 1 else "never"
+        
+        # Calculate BMI if height and weight are available
+        if 'height' in transformed_data and 'weight' in transformed_data:
+            height_m = transformed_data['height'] / 100  # Convert cm to meters
+            weight_kg = transformed_data['weight']
+            if height_m > 0:
+                transformed_data['bmi'] = round(weight_kg / (height_m ** 2), 2)
+        
+        # Set default diabetes-specific fields if not present
+        if 'hypertension' not in transformed_data:
+            # Infer from blood pressure if available
+            ap_hi = transformed_data.get('ap_hi', 0)
+            transformed_data['hypertension'] = 1 if ap_hi >= 140 else 0
+        
+        if 'heart_disease' not in transformed_data:
+            transformed_data['heart_disease'] = 0  # Default to no known heart disease
+        
+        # Set default HbA1c and glucose if not available
+        if 'HbA1c_level' not in transformed_data:
+            transformed_data['HbA1c_level'] = 5.7  # Default normal value
+        
+        if 'blood_glucose_level' not in transformed_data:
+            transformed_data['blood_glucose_level'] = 95  # Default fasting glucose
     
     # Add more model-specific transformations here as needed
     # elif model_type == "cardiovascular_disease":
@@ -90,7 +123,8 @@ def diagnosis_agent_node(state: GraphState):
     mcp_prompt = f"Based on the following patient data, provide a prediction for {model_type.replace('_', ' ')}. Data: {json.dumps(transformed_data)}"
     prediction_result = get_mcp_prediction_tool(mcp_prompt)
 
-    if prediction_result.get('error') or not prediction_result.get('answer'):
+    # Check for actual errors (not null values)
+    if prediction_result.get('error') is not None or not prediction_result.get('answer'):
         error_msg = prediction_result.get('error') or "No answer from prediction model."
         state['error_message'] = f"Error from prediction model: {error_msg}"
         return state
@@ -162,7 +196,7 @@ def diagnosis_agent_node(state: GraphState):
         {raw_prediction}
         """
 
-    medgemma_endpoint = "http://192.168.1.228:1234/v1/chat/completions"
+    medgemma_endpoint = "http://192.168.1.65:1234/v1/chat/completions"
     medgemma_model = "medgemma-4b-it"
     medgemma_system = "You are a medical expert generating a comprehensive diagnostic report. Focus on clinical accuracy and actionable insights."
     
@@ -218,30 +252,67 @@ def _extract_shap_data(prediction_result: dict) -> dict:
                 else:
                     result_data = result_str
                 
-                # Extract raw explanations dictionary
-                raw_explanations = result_data.get('explanations', {})
+                # Handle nested explanations structure
+                explanations_data = result_data.get('explanations', {})
                 
-                # Convert dictionary to list format with calculated fields
+                # Check if explanations is nested (explanations.explanations)
+                if 'explanations' in explanations_data:
+                    raw_explanations_list = explanations_data['explanations']
+                    top_factors_list = explanations_data.get('top_factors', [])
+                    summary = explanations_data.get('summary', '')
+                else:
+                    # Fallback to old format (explanations as dictionary)
+                    raw_explanations_list = []
+                    for feature, data in explanations_data.items():
+                        if isinstance(data, dict):
+                            raw_explanations_list.append({
+                                'feature': feature,
+                                'value': data.get('value', 'N/A'),
+                                'shap_value': data.get('shap_value', 0),
+                                'description': data.get('description', feature),
+                                'importance': abs(data.get('shap_value', 0)),
+                                'impact': 'increases' if data.get('shap_value', 0) > 0 else 'decreases'
+                            })
+                    top_factors_list = []
+                    summary = ''
+                
+                # Process the explanations list
                 explanations_list = []
-                for feature, data in raw_explanations.items():
-                    if isinstance(data, dict):
-                        shap_value = data.get('shap_value', 0)
-                        explanation = {
-                            'feature': feature,
-                            'value': data.get('value', 'N/A'),
+                for explanation in raw_explanations_list:
+                    if isinstance(explanation, dict):
+                        shap_value = explanation.get('shap_value', 0)
+                        processed_explanation = {
+                            'feature': explanation.get('feature', 'Unknown'),
+                            'value': explanation.get('value', 'N/A'),
                             'shap_value': shap_value,
-                            'description': data.get('description', feature),
+                            'description': explanation.get('description', explanation.get('feature', 'Unknown')),
                             'importance': abs(shap_value),  # Importance is absolute value
-                            'impact': 'increases' if shap_value > 0 else 'decreases'
+                            'impact': explanation.get('impact', 'increases' if shap_value > 0 else 'decreases')
                         }
-                        explanations_list.append(explanation)
+                        explanations_list.append(processed_explanation)
                 
-                # Sort by importance and get top factors
+                # Sort by importance if not already sorted
                 explanations_list.sort(key=lambda x: x['importance'], reverse=True)
-                top_factors = explanations_list[:3]  # Top 3 most important
                 
-                # Create summary text
-                if explanations_list:
+                # Use provided top factors or create from sorted explanations
+                if top_factors_list:
+                    top_factors = []
+                    for factor in top_factors_list:
+                        if isinstance(factor, dict):
+                            shap_value = factor.get('shap_value', 0)
+                            top_factors.append({
+                                'feature': factor.get('feature', 'Unknown'),
+                                'value': factor.get('value', 'N/A'),
+                                'shap_value': shap_value,
+                                'description': factor.get('description', factor.get('feature', 'Unknown')),
+                                'importance': abs(shap_value),
+                                'impact': factor.get('impact', 'increases' if shap_value > 0 else 'decreases')
+                            })
+                else:
+                    top_factors = explanations_list[:3]  # Top 3 most important
+                
+                # Create summary if not provided
+                if not summary and explanations_list:
                     top_factor = explanations_list[0]
                     summary = f"The prediction is primarily influenced by: {top_factor['feature']} (value: {top_factor['value']:.2f}) {top_factor['impact']} the risk"
                     if len(explanations_list) > 1:
@@ -251,8 +322,6 @@ def _extract_shap_data(prediction_result: dict) -> dict:
                         third_factor = explanations_list[2]
                         summary += f", {third_factor['feature']} (value: {third_factor['value']:.2f}) {third_factor['impact']} the risk"
                     summary += "."
-                else:
-                    summary = "No significant factors identified."
                 
                 return {
                     'model_prediction': result_data.get('prediction'),

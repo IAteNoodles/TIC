@@ -19,7 +19,7 @@ def intent_agent_node(state: GraphState):
     You must respond with ONLY the name of the intent and nothing else. For example: `diagnosis`
     """
     
-    gemma_endpoint = "http://192.168.1.54:1234/v1/chat/completions"
+    gemma_endpoint = "http://192.168.1.228:1234/v1/chat/completions"
     gemma_model = "google/gemma-3-4b"
 
     response = call_llm(

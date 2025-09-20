@@ -42,7 +42,7 @@ def call_llm(model_name: str, endpoint: str, system_prompt: str, user_prompt: st
 
 if __name__ == '__main__':
     # Example usage for Gemma 3
-    gemma_endpoint = "http://192.168.1.54:1234/v1/chat/completions"
+    gemma_endpoint = "http://192.168.1.228:1234/v1/chat/completions"
     gemma_model = "google/gemma-3-4b"
     gemma_system = "You are a helpful assistant."
     gemma_user = "What is the capital of France?"
@@ -55,7 +55,7 @@ if __name__ == '__main__':
         print(response)
 
     # Example usage for MedGemma
-    medgemma_endpoint = "http://192.168.1.228:1234/v1/chat/completions"
+    medgemma_endpoint = "http://192.168.1.65:1234/v1/chat/completions"
     medgemma_model = "medgemma-4b-it"
     medgemma_system = "You are a medical expert."
     medgemma_user = "What are the common symptoms of a cold?"
