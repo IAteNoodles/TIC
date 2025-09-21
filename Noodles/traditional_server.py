@@ -23,7 +23,7 @@ class CypherQueryRequest(BaseModel):
 
 class SaveReportRequest(BaseModel):
     report: str
-    patient_id: Optional[Union[str, int]] = None
+    patient_id: int = None
     # Accept alternative field name from clients
     id: Optional[Union[str, int]] = None
 

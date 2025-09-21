@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Speech-to-Text</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        select, input[type="file"], button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        .loading {
+            text-align: center;
+            color: #007bff;
+        }
+        .model-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .status {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+        }
+        .status.online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Whisper Speech-to-Text</h1>
+        
+        <div id="status" class="status offline">
+            <span>🔴 API Status: Checking...</span>
+            <button onclick="checkStatus()" style="width: auto; padding: 5px 10px;">Refresh</button>
+        </div>
+
+        <form id="transcribeForm">
+            <div class="form-group">
+                <label for="audioFile">Select Audio File:</label>
+                <input type="file" id="audioFile" accept="audio/*" required>
+                <div class="model-info">Supported formats: MP3, WAV, M4A, MP4, MPEG, MPGA, WEBM, OGG, FLAC</div>
+            </div>
+
+            <div class="form-group">
+                <label for="model">Whisper Model:</label>
+                <select id="model" required>
+                    <optgroup label="🚀 English-Only Models (Faster)">
+                        <option value="tiny.en">Tiny.en (39 MB, ~12x speed) - Fastest English</option>
+                        <option value="base.en" selected>Base.en (74 MB, ~8x speed) - Recommended</option>
+                        <option value="small.en">Small.en (244 MB, ~5x speed) - Better accuracy</option>
+                        <option value="medium.en">Medium.en (769 MB, ~2.5x speed) - High accuracy</option>
+                    </optgroup>
+                    <optgroup label="🌍 Multilingual Models">
+                        <option value="tiny">Tiny (39 MB, ~10x speed) - Fastest multilingual</option>
+                        <option value="base">Base (74 MB, ~7x speed) - Good balance</option>
+                        <option value="small">Small (244 MB, ~4x speed) - Better accuracy</option>
+                        <option value="medium">Medium (769 MB, ~2x speed) - High accuracy</option>
+                        <option value="turbo">Turbo (809 MB, ~8x speed) - Latest fast model</option>
+                        <option value="large">Large (1550 MB, ~1x speed) - Highest accuracy</option>
+                        <option value="large-v2">Large-v2 (1550 MB, ~1x speed) - Improved</option>
+                        <option value="large-v3">Large-v3 (1550 MB, ~1x speed) - Latest</option>
+                    </optgroup>
+                </select>
+                <div class="model-info">💡 English-only models (.en) are faster and more efficient for English speech</div>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="includeSegments"> Include word-level timestamps
+                </label>
+            </div>
+
+            <button type="submit" id="submitBtn">🎯 Transcribe Audio</button>
+        </form>
+
+        <div id="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8006';
+        
+        // Check API status on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            checkStatus();
+        });
+
+        async function checkStatus() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.className = 'status online';
+                    statusDiv.innerHTML = `
+                        <span>🟢 API Status: Online (${data.loaded_models.length} models loaded)</span>
+                        <button onclick="checkStatus()" style="width: auto; padding: 5px 10px;">Refresh</button>
+                    `;
+                } else {
+                    throw new Error('API not responding');
+                }
+            } catch (error) {
+                statusDiv.className = 'status offline';
+                statusDiv.innerHTML = `
+                    <span>🔴 API Status: Offline - ${error.message}</span>
+                    <button onclick="checkStatus()" style="width: auto; padding: 5px 10px;">Refresh</button>
+                `;
+            }
+        }
+
+        document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('audioFile');
+            const modelSelect = document.getElementById('model');
+            const includeSegments = document.getElementById('includeSegments');
+            const submitBtn = document.getElementById('submitBtn');
+            const resultDiv = document.getElementById('result');
+            
+            if (!fileInput.files[0]) {
+                showResult('Please select an audio file.', 'error');
+                return;
+            }
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = '🔄 Processing...';
+            showResult('Processing audio file...', 'loading');
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                
+                const params = new URLSearchParams({
+                    model: modelSelect.value,
+                    include_segments: includeSegments.checked,
+                    temperature: '0.0'
+                });
+                
+                const response = await fetch(`${API_BASE}/transcribe?${params}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayTranscription(data);
+                } else {
+                    showResult(`Error: ${data.detail || 'Unknown error'}`, 'error');
+                }
+                
+            } catch (error) {
+                showResult(`Network error: ${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🎯 Transcribe Audio';
+            }
+        });
+        
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.display = 'block';
+            resultDiv.className = `result ${type}`;
+            resultDiv.innerHTML = message;
+        }
+        
+        function displayTranscription(data) {
+            let html = `
+                <h3>✅ Transcription Result</h3>
+                <div style="background: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                    <strong>Text:</strong><br>
+                    <p style="font-size: 16px; line-height: 1.5; margin: 10px 0;">${data.text}</p>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                    <div><strong>Model:</strong> ${data.model_used}</div>
+                    <div><strong>Language:</strong> ${data.language}</div>
+                </div>
+            `;
+            
+            if (data.duration) {
+                html += `<div style="margin-top: 5px;"><strong>Duration:</strong> ${data.duration.toFixed(2)} seconds</div>`;
+            }
+            
+            if (data.segments && data.segments.length > 0) {
+                html += `
+                    <details style="margin-top: 15px;">
+                        <summary><strong>Word-level Timestamps</strong></summary>
+                        <div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">
+                `;
+                
+                data.segments.forEach(segment => {
+                    html += `
+                        <div style="margin: 5px 0; padding: 5px; background: #f8f9fa; border-radius: 3px;">
+                            <strong>${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s:</strong> ${segment.text}
+                        </div>
+                    `;
+                });
+                
+                html += `</div></details>`;
+            }
+            
+            showResult(html, 'success');
+        }
+    </script>
+</body>
+</html>

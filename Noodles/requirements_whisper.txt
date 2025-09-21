@@ -1,0 +1,20 @@
+# Whisper Server Requirements
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+openai-whisper>=20231117
+
+# PyTorch - Install appropriate version for your system
+# For CUDA support: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+# For CPU only: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Audio processing
+librosa>=0.10.0
+
+# Optional dependencies
+ffmpeg-python>=0.2.0
+pydantic>=2.0.0
+imageio-ffmpeg>=0.4.9
+librosa>=0.10.0
