@@ -1,10 +1,11 @@
-from connectors.llm_connector import call_llm
+from connectors.llm_connector import call_llm, call_llm_streaming
 from state import GraphState
 from tools.parameter_tool import get_model_parameters_tool
 from tools.mcp_tool import get_mcp_prediction_tool
-from tools.backend_tool import get_patient_data_tool
+from tools.backend_tool import get_patient_data_tool, get_patient_summary_tool
 from logging_config import get_logger
 import json
+from typing import Iterator
 
 logger = get_logger("agents.diagnosis")
 
@@ -96,11 +97,48 @@ def diagnosis_agent_node(state: GraphState):
     query = state.get('query')
 
     # Fetch patient data
-    patient_data = get_patient_data_tool(patient_id)
-    if "error" in patient_data:
-        state['error_message'] = patient_data['error']
+    patient_data_result = get_patient_data_tool(patient_id)
+    if not patient_data_result.get("success"):
+        state['error_message'] = f"Failed to fetch patient data: {patient_data_result.get('error', 'Unknown error')}"
         return state
-    state['db_response'] = patient_data
+    
+    # Extract the patient data for processing
+    medical_data = patient_data_result["medical_data"]
+    personal_info = patient_data_result["personal_info"]
+    
+    # Combine personal and medical data for diagnosis processing
+    # This creates a unified data structure with all fields needed for ML models
+    patient_data = {
+        # Personal information
+        "age": medical_data.get("age") or personal_info.get("age"),
+        "gender": personal_info.get("gender"),
+        
+        # Medical measurements
+        "height": medical_data.get("height"),
+        "weight": medical_data.get("weight"),
+        "bmi": medical_data.get("bmi"),
+        
+        # Cardiovascular data
+        "ap_hi": medical_data.get("ap_hi"),
+        "ap_lo": medical_data.get("ap_lo"),
+        "cholesterol": medical_data.get("cholesterol"),
+        "gluc": medical_data.get("glucose"),  # Note: backend uses 'glucose', model expects 'gluc'
+        
+        # Lifestyle factors
+        "smoke": medical_data.get("smoking"),
+        "alco": medical_data.get("alcohol"),
+        "active": medical_data.get("physical_activity"),
+        
+        # Diabetes-specific fields
+        "hypertension": medical_data.get("hypertension"),
+        "heart_disease": medical_data.get("heart_disease"),
+        "smoking_history": medical_data.get("smoking_history"),
+        "HbA1c_level": medical_data.get("HbA1c_level"),
+        "blood_glucose_level": medical_data.get("blood_glucose_level")
+    }
+    
+    # Store full response for reference
+    state['db_response'] = patient_data_result
 
     # --- 1. Determine which model to use ---
     model_type = _determine_model_type(query)
@@ -109,24 +147,49 @@ def diagnosis_agent_node(state: GraphState):
     model_params = get_model_parameters_tool() 
     required_fields = model_params.get(model_type, {}).get("required_fields", [])
     
-    missing_fields = [field for field in required_fields if field not in patient_data or patient_data.get(field) is None]
+    logger.info(f"Model type: {model_type}")
+    logger.info(f"Required fields: {required_fields}")
+    logger.info(f"Available patient data keys: {list(patient_data.keys())}")
+    
+    missing_fields = []
+    for field in required_fields:
+        if field not in patient_data or patient_data.get(field) is None:
+            missing_fields.append(field)
+            logger.warning(f"Missing field: {field}, value: {patient_data.get(field)}")
     
     if missing_fields:
+        logger.error(f"Missing required fields for {model_type}: {missing_fields}")
         clarification_request = f"Patient data is incomplete for a {model_type.replace('_', ' ')} diagnosis. Please provide: {', '.join(missing_fields)}."
         state['final_report'] = clarification_request
         return state
+    
+    logger.info(f"All required fields present for {model_type} diagnosis")
 
     # --- 3. Transform patient data for MCP model ---
     transformed_data = _transform_patient_data_for_mcp(patient_data, model_type)
     
     # --- 4. Call MCP model for prediction ---
     mcp_prompt = f"Based on the following patient data, provide a prediction for {model_type.replace('_', ' ')}. Data: {json.dumps(transformed_data)}"
-    prediction_result = get_mcp_prediction_tool(mcp_prompt)
+    
+    try:
+        logger.info(f"Calling MCP model for {model_type} prediction")
+        prediction_result = get_mcp_prediction_tool(mcp_prompt)
+        logger.info(f"MCP model response received: {type(prediction_result)}")
+    except Exception as e:
+        logger.error(f"MCP model call failed: {str(e)}")
+        # Provide a fallback analysis when MCP service is unavailable
+        fallback_report = _generate_fallback_analysis(patient_data, model_type)
+        state['final_report'] = fallback_report
+        return state
 
     # Check for actual errors (not null values)
     if prediction_result.get('error') is not None or not prediction_result.get('answer'):
         error_msg = prediction_result.get('error') or "No answer from prediction model."
-        state['error_message'] = f"Error from prediction model: {error_msg}"
+        logger.warning(f"MCP model error: {error_msg}")
+        
+        # Provide fallback analysis instead of error
+        fallback_report = _generate_fallback_analysis(patient_data, model_type)
+        state['final_report'] = fallback_report
         return state
     
     raw_prediction = prediction_result.get('answer', '')
@@ -624,3 +687,321 @@ def _get_clinical_significance(feature: str, value, impact: str, importance: flo
     }
     
     return significance_map.get(feature, f"Feature shows {'high' if importance > 0.5 else 'moderate'} predictive importance")
+
+
+def _generate_fallback_analysis(patient_data: dict, model_type: str) -> str:
+    """
+    Generate a basic analysis when MCP model is unavailable.
+    Provides rule-based assessment based on clinical guidelines.
+    """
+    logger.info(f"Generating fallback analysis for {model_type}")
+    
+    # Get patient basic info
+    age = patient_data.get('age', 'Unknown')
+    gender = patient_data.get('gender', 'Unknown')
+    
+    analysis_lines = [
+        f"📋 CLINICAL ANALYSIS REPORT",
+        f"══════════════════════════════════════════",
+        f"Patient Age: {age} years",
+        f"Gender: {gender}",
+        f"Analysis Type: {model_type.replace('_', ' ').title()}",
+        f"",
+        f"⚠️  NOTE: Advanced AI model unavailable - Using clinical guidelines",
+        f"",
+        f"📊 CLINICAL ASSESSMENT:"
+    ]
+    
+    if model_type == "diabetes":
+        analysis_lines.extend(_generate_diabetes_fallback(patient_data))
+    elif model_type == "cardiovascular_disease":
+        analysis_lines.extend(_generate_cardiovascular_fallback(patient_data))
+    else:
+        analysis_lines.extend([
+            f"• Clinical assessment for {model_type} requires specialist evaluation",
+            f"• Recommend consultation with appropriate healthcare provider"
+        ])
+    
+    analysis_lines.extend([
+        f"",
+        f"🩺 RECOMMENDATIONS:",
+        f"• Schedule follow-up with healthcare provider",
+        f"• Continue regular monitoring of vital signs",
+        f"• Maintain healthy lifestyle practices",
+        f"",
+        f"⚡ SYSTEM STATUS:",
+        f"• Advanced AI analysis temporarily unavailable",
+        f"• Report based on clinical guidelines and patient data",
+        f"• For detailed AI analysis, please try again later",
+        f"",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    ])
+    
+    return "\n".join(analysis_lines)
+
+
+def _generate_diabetes_fallback(patient_data: dict) -> list:
+    """Generate diabetes risk assessment based on clinical guidelines."""
+    lines = []
+    risk_factors = []
+    
+    # Check key diabetes risk factors
+    age = patient_data.get('age')
+    if age and int(age) >= 45:
+        risk_factors.append(f"Age {age} years (increased risk ≥45)")
+    
+    bmi = patient_data.get('bmi')
+    if bmi and float(bmi) >= 25:
+        risk_factors.append(f"BMI {bmi} (overweight/obese)")
+    
+    hba1c = patient_data.get('HbA1c_level')
+    if hba1c and float(hba1c) >= 5.7:
+        if float(hba1c) >= 6.5:
+            risk_factors.append(f"HbA1c {hba1c}% (diabetic range ≥6.5%)")
+        else:
+            risk_factors.append(f"HbA1c {hba1c}% (prediabetic range 5.7-6.4%)")
+    
+    glucose = patient_data.get('blood_glucose_level')
+    if glucose and float(glucose) >= 100:
+        if float(glucose) >= 126:
+            risk_factors.append(f"Fasting glucose {glucose} mg/dL (diabetic ≥126)")
+        else:
+            risk_factors.append(f"Fasting glucose {glucose} mg/dL (prediabetic 100-125)")
+    
+    hypertension = patient_data.get('hypertension')
+    if hypertension and int(hypertension) == 1:
+        risk_factors.append("History of hypertension")
+    
+    # Generate assessment
+    if len(risk_factors) >= 3:
+        lines.append("🔴 HIGH DIABETES RISK - Multiple risk factors present")
+    elif len(risk_factors) >= 1:
+        lines.append("🟡 MODERATE DIABETES RISK - Some risk factors present")
+    else:
+        lines.append("🟢 LOW DIABETES RISK - Few risk factors identified")
+    
+    lines.append("")
+    lines.append("Risk Factors Identified:")
+    for factor in risk_factors:
+        lines.append(f"  • {factor}")
+    
+    if not risk_factors:
+        lines.append("  • No major risk factors identified in available data")
+    
+    return lines
+
+
+def _generate_cardiovascular_fallback(patient_data: dict) -> list:
+    """Generate cardiovascular risk assessment based on clinical guidelines."""
+    lines = []
+    risk_factors = []
+    
+    # Check key cardiovascular risk factors
+    age = patient_data.get('age')
+    gender = patient_data.get('gender', '').lower()
+    
+    if age:
+        if (gender == 'male' and int(age) >= 45) or (gender == 'female' and int(age) >= 55):
+            risk_factors.append(f"Age {age} years (increased risk for {gender})")
+    
+    ap_hi = patient_data.get('ap_hi')
+    ap_lo = patient_data.get('ap_lo')
+    if ap_hi and ap_lo:
+        if int(ap_hi) >= 140 or int(ap_lo) >= 90:
+            risk_factors.append(f"High blood pressure {ap_hi}/{ap_lo} mmHg")
+        elif int(ap_hi) >= 130 or int(ap_lo) >= 80:
+            risk_factors.append(f"Elevated blood pressure {ap_hi}/{ap_lo} mmHg")
+    
+    cholesterol = patient_data.get('cholesterol')
+    if cholesterol and int(cholesterol) >= 2:
+        risk_factors.append("Elevated cholesterol levels")
+    
+    smoking = patient_data.get('smoke')
+    if smoking and int(smoking) == 1:
+        risk_factors.append("Current smoking")
+    
+    bmi = patient_data.get('bmi')
+    if bmi and float(bmi) >= 30:
+        risk_factors.append(f"Obesity (BMI {bmi})")
+    
+    # Generate assessment
+    if len(risk_factors) >= 3:
+        lines.append("🔴 HIGH CARDIOVASCULAR RISK - Multiple risk factors")
+    elif len(risk_factors) >= 1:
+        lines.append("🟡 MODERATE CARDIOVASCULAR RISK - Some risk factors")
+    else:
+        lines.append("🟢 LOW CARDIOVASCULAR RISK - Few risk factors")
+    
+    lines.append("")
+    lines.append("Risk Factors Identified:")
+    for factor in risk_factors:
+        lines.append(f"  • {factor}")
+    
+    if not risk_factors:
+        lines.append("  • No major risk factors identified in available data")
+    
+    return lines
+
+
+def diagnosis_agent_streaming_node(state: GraphState) -> Iterator[str]:
+    """
+    Streaming version of the diagnosis agent that yields report chunks in real-time.
+    This function performs the same diagnosis workflow but streams the final report generation.
+    """
+    logger.info("Streaming diagnosis agent started")
+    
+    patient_id = state.get('patient_id')
+    query = state.get('query')
+
+    # Yield initial status
+    yield "[STATUS] Fetching patient data..."
+
+    # Fetch patient data
+    patient_data_result = get_patient_data_tool(patient_id)
+    if not patient_data_result.get("success"):
+        error_msg = f"Failed to fetch patient data: {patient_data_result.get('error', 'Unknown error')}"
+        yield f"[ERROR] {error_msg}"
+        return
+    
+    yield "[STATUS] Processing patient information..."
+
+    # Extract and combine patient data (same as non-streaming version)
+    medical_data = patient_data_result["medical_data"]
+    personal_info = patient_data_result["personal_info"]
+    
+    patient_data = {
+        "age": medical_data.get("age") or personal_info.get("age"),
+        "gender": personal_info.get("gender"),
+        "height": medical_data.get("height"),
+        "weight": medical_data.get("weight"),
+        "bmi": medical_data.get("bmi"),
+        "ap_hi": medical_data.get("ap_hi"),
+        "ap_lo": medical_data.get("ap_lo"),
+        "cholesterol": medical_data.get("cholesterol"),
+        "gluc": medical_data.get("glucose"),
+        "smoke": medical_data.get("smoking"),
+        "alco": medical_data.get("alcohol"),
+        "active": medical_data.get("physical_activity"),
+        "hypertension": medical_data.get("hypertension"),
+        "heart_disease": medical_data.get("heart_disease"),
+        "smoking_history": medical_data.get("smoking_history"),
+        "HbA1c_level": medical_data.get("HbA1c_level"),
+        "blood_glucose_level": medical_data.get("blood_glucose_level")
+    }
+
+    # Determine model type and check data sufficiency
+    model_type = _determine_model_type(query)
+    model_params = get_model_parameters_tool() 
+    required_fields = model_params.get(model_type, {}).get("required_fields", [])
+    
+    yield f"[STATUS] Using {model_type.replace('_', ' ')} analysis model..."
+
+    # Check for missing fields
+    missing_fields = [field for field in required_fields 
+                     if field not in patient_data or patient_data.get(field) is None]
+    
+    if missing_fields:
+        error_msg = f"Patient data is incomplete for a {model_type.replace('_', ' ')} diagnosis. Please provide: {', '.join(missing_fields)}."
+        yield f"[ERROR] {error_msg}"
+        return
+
+    yield "[STATUS] Running AI model prediction..."
+
+    # Transform and call MCP model
+    transformed_data = _transform_patient_data_for_mcp(patient_data, model_type)
+    mcp_prompt = f"Based on the following patient data, provide a prediction for {model_type.replace('_', ' ')}. Data: {json.dumps(transformed_data)}"
+    
+    try:
+        prediction_result = get_mcp_prediction_tool(mcp_prompt)
+    except Exception as e:
+        logger.error(f"MCP model call failed: {str(e)}")
+        yield "[STATUS] AI model unavailable, generating clinical analysis..."
+        fallback_report = _generate_fallback_analysis(patient_data, model_type)
+        for line in fallback_report.split('\n'):
+            if line.strip():
+                yield line + '\n'
+        return
+
+    if prediction_result.get('error') is not None or not prediction_result.get('answer'):
+        yield "[STATUS] AI model unavailable, generating clinical analysis..."
+        fallback_report = _generate_fallback_analysis(patient_data, model_type)
+        for line in fallback_report.split('\n'):
+            if line.strip():
+                yield line + '\n'
+        return
+
+    raw_prediction = prediction_result.get('answer', '')
+    shap_data = _extract_shap_data(prediction_result)
+    
+    yield "[STATUS] Generating comprehensive medical report..."
+
+    # Prepare the enhanced report prompt
+    if shap_data:
+        shap_summary = _create_detailed_shap_summary(shap_data, patient_data)
+        report_prompt = f"""
+        Generate a comprehensive diagnostic report for {model_type.replace('_', ' ')} based on SPECIFIC patient data and AI model analysis with SHAP explanations.
+        
+        CRITICAL: You MUST integrate the SHAP feature importance scores and explanations into your report.
+        
+        Structure the report with these EXACT sections:
+        1. Executive Summary
+        2. AI Model Prediction & Confidence
+        3. SHAP Feature Analysis (MANDATORY - Include all SHAP scores and explanations)
+        4. Risk Factor Interpretation
+        5. Clinical Correlation
+        6. Evidence-Based Recommendations
+        7. Next Steps & Monitoring
+        
+        PATIENT DATA:
+        {json.dumps(patient_data, indent=2)}
+        
+        AI MODEL PREDICTION:
+        {raw_prediction}
+        
+        SHAP FEATURE IMPORTANCE ANALYSIS:
+        {shap_summary}
+        
+        INSTRUCTIONS:
+        - Start with the SHAP analysis findings in section 3
+        - Explain what each SHAP score means clinically
+        - Reference specific SHAP values when discussing risk factors
+        - Use the SHAP importance rankings to prioritize your recommendations
+        - Include numerical SHAP values in parentheses when mentioning features
+        
+        Make this report evidence-based using the SHAP explanations as the scientific foundation.
+        """
+    else:
+        report_prompt = f"""
+        Generate a comprehensive diagnostic report for {model_type.replace('_', ' ')} based on the patient data and model prediction.
+        Structure the report with: Patient Summary, Key Findings, Raw Model Prediction, Potential Diagnosis, and Recommended Next Steps.
+
+        Patient Data:
+        {json.dumps(patient_data, indent=2)}
+
+        Raw Prediction from ML Model:
+        {raw_prediction}
+        """
+
+    # Stream the LLM response
+    medgemma_endpoint = "http://192.168.1.65:1234/v1/chat/completions"
+    medgemma_model = "medgemma-4b-it"
+    medgemma_system = "You are a medical expert generating a comprehensive diagnostic report. Focus on clinical accuracy and actionable insights."
+    
+    try:
+        # Use streaming LLM call
+        for chunk in call_llm_streaming(
+            model_name=medgemma_model,
+            endpoint=medgemma_endpoint,
+            system_prompt=medgemma_system,
+            user_prompt=report_prompt,
+            timeout=300
+        ):
+            if chunk and not chunk.startswith('[ERROR'):
+                yield chunk
+    except Exception as e:
+        logger.error(f"Streaming LLM call failed: {e}")
+        yield "[STATUS] Generating enhanced report..."
+        enhanced_report = _generate_enhanced_report(patient_data, raw_prediction, shap_data, model_type)
+        for line in enhanced_report.split('\n'):
+            if line.strip():
+                yield line + '\n'

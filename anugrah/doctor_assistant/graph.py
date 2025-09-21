@@ -1,9 +1,9 @@
-from typing import TypedDict
+from typing import TypedDict, Iterator
 from langgraph.graph import StateGraph, END
 from agents.main_agent import main_agent_node
 from agents.intent_agent import intent_agent_node
-from agents.diagnosis_agent import diagnosis_agent_node
-from tools.backend_tool import get_patient_data_tool
+from agents.diagnosis_agent import diagnosis_agent_node, diagnosis_agent_streaming_node
+from tools.backend_tool import get_patient_data_tool, get_patient_summary_tool
 from state import GraphState
 from logging_config import get_logger
 
@@ -25,14 +25,30 @@ def information_retrieval_node(state: GraphState):
     db_response = get_patient_data_tool(patient_id)
     state['db_response'] = db_response
 
-    if "error" in db_response:
-        state['error_message'] = db_response['error']
-    else:
-        # Simple summary (LLM would be used here in a real scenario)
-        summary = f"Patient: {db_response.get('name')}, Age: {db_response.get('age')}. " \
-                  f"Symptoms: {', '.join(db_response.get('symptoms', []))}. " \
-                  f"Vitals: {db_response.get('vitals')}."
-        state['final_report'] = summary # Using final_report to pass back the summary
+    if not db_response.get("success"):
+        state['error_message'] = db_response.get('error', 'Failed to fetch patient data')
+        return state
+    
+    # Generate a human-readable summary using the new tool
+    try:
+        summary = get_patient_summary_tool(patient_id)
+        state['final_report'] = summary
+    except Exception as e:
+        logger.error(f"Error generating patient summary: {str(e)}")
+        # Fallback to basic summary
+        personal_info = db_response.get('personal_info', {})
+        medical_data = db_response.get('medical_data', {})
+        basic_summary = f"""Patient Information Retrieved:
+        
+Name: {personal_info.get('name', 'Unknown')}
+Age: {personal_info.get('age', 'Unknown')} years
+Gender: {personal_info.get('gender', 'Unknown')}
+BMI: {medical_data.get('bmi', 'N/A')}
+Blood Pressure: {medical_data.get('ap_hi', 'N/A')}/{medical_data.get('ap_lo', 'N/A')} mmHg
+Blood Glucose: {medical_data.get('blood_glucose_level', 'N/A')} mg/dL
+HbA1c: {medical_data.get('HbA1c_level', 'N/A')}%
+"""
+        state['final_report'] = basic_summary
 
     return state
 
@@ -79,7 +95,75 @@ app = workflow.compile()
 
 if __name__ == '__main__':
     # Simple smoke test
-    inputs = {"query": "Get me patient data.", "patient_id": "123"}
+    inputs: GraphState = {
+        "query": "Get me patient data.", 
+        "patient_id": "123",
+        "intent": "",
+        "db_response": {},
+        "final_report": "",
+        "error_message": ""
+    }
     for _ in app.stream(inputs):
         pass
+
+
+def run_streaming_diagnosis(query: str, patient_id: str) -> Iterator[str]:
+    """
+    Run a streaming diagnosis workflow that yields real-time results.
+    
+    Args:
+        query: User's medical query
+        patient_id: ID of the patient to analyze
+        
+    Yields:
+        str: Real-time chunks of the diagnosis report
+    """
+    logger.info(f"Starting streaming diagnosis for patient {patient_id}")
+    
+    # Create initial state
+    state: GraphState = {
+        "query": query,
+        "patient_id": patient_id,
+        "intent": "",
+        "db_response": {},
+        "final_report": "",
+        "error_message": ""
+    }
+    
+    # Step 1: Determine intent
+    yield "[STATUS] Analyzing your request..."
+    try:
+        state = intent_agent_node(state)
+        intent = state.get('intent', 'diagnosis')
+        logger.info(f"Intent classified as: {intent}")
+        
+        if intent == "information_retrieval":
+            yield "[STATUS] Retrieving patient information..."
+            state = information_retrieval_node(state)
+            
+            if state.get('error_message'):
+                yield f"[ERROR] {state['error_message']}"
+                return
+            
+            # Stream the information retrieval result
+            final_report = state.get('final_report', '')
+            for line in final_report.split('\n'):
+                if line.strip():
+                    yield line + '\n'
+        else:
+            # Stream diagnosis results
+            yield "[STATUS] Starting medical analysis..."
+            for chunk in diagnosis_agent_streaming_node(state):
+                yield chunk
+                
+    except Exception as e:
+        logger.error(f"Error in streaming workflow: {e}")
+        yield f"[ERROR] An unexpected error occurred: {str(e)}"
+
+
+def stream_diagnosis_workflow(query: str, patient_id: str) -> Iterator[str]:
+    """
+    Alias for run_streaming_diagnosis for compatibility.
+    """
+    return run_streaming_diagnosis(query, patient_id)
 

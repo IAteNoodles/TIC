@@ -1,6 +1,6 @@
 from state import GraphState
 from tools.mcp_tool import get_mcp_prediction_tool
-from tools.backend_tool import get_patient_data_tool
+from tools.backend_tool import get_patient_data_tool, get_patient_summary_tool
 import json
 
 def prediction_agent_node(state: GraphState):
@@ -15,15 +15,15 @@ def prediction_agent_node(state: GraphState):
         return state
 
     # 1. Fetch patient data
-    patient_data = get_patient_data_tool(patient_id)
-    if "error" in patient_data:
-        state['error_message'] = patient_data['error']
+    patient_data_result = get_patient_data_tool(patient_id)
+    if not patient_data_result.get("success"):
+        state['error_message'] = f"Failed to fetch patient data: {patient_data_result.get('error', 'Unknown error')}"
         return state
 
     # 2. Construct the prompt for the MCP model
-    # This is a simple example; a real implementation might involve
-    # more sophisticated logic to select the right model and format the data.
-    prompt = f"Based on the following patient data, provide a prediction. Data: {json.dumps(patient_data)}"
+    # Use the formatted patient data for better results
+    patient_summary = get_patient_summary_tool(patient_id)
+    prompt = f"Based on the following patient data, provide a prediction:\n\n{patient_summary}"
 
     # 3. Call the MCP model tool
     prediction_result = get_mcp_prediction_tool(prompt)
