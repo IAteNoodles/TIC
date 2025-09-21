@@ -625,21 +625,34 @@ def render_diabetes_prediction(personal: Dict, lab_details: List[Dict]):
             else:
                 st.error(f"Prediction failed: {result.get('error', 'Unknown error')}")
 
+def parse_json_string(json_string: str) -> Optional[Any]:
+    """Safely parse a JSON string that might be nested or malformed."""
+    if not isinstance(json_string, str):
+        return json_string
+    
+    try:
+        # First, try standard JSON parsing
+        return json.loads(json_string)
+    except json.JSONDecodeError:
+        try:
+            # If that fails, try ast.literal_eval for Python literal structures
+            import ast
+            return ast.literal_eval(json_string)
+        except (ValueError, SyntaxError, MemoryError, TypeError):
+            # Return None if all parsing fails
+            return None
+
 def display_prediction_result(title: str, data: Dict):
     """Display prediction results in a nice format"""
     
-    # Debug section - remove in production
+    # Debug section - can be removed in production
     with st.expander("🔧 Debug: Raw Prediction Data"):
         st.write("**Data structure:**")
         st.json(data)
-        st.write("**Explanations type:**", type(data.get("explanations")))
-        st.write("**Top factors type:**", type(data.get("top_factors")))
     
     # Determine risk level and styling
     prediction = data.get("prediction")
-    risk_class = ""
-    if prediction is not None and isinstance(prediction, (int, float)):
-        risk_class = "risk-high" if prediction > 0.5 else "risk-low"
+    risk_class = "risk-high" if isinstance(prediction, (int, float)) and prediction > 0.5 else "risk-low"
     
     # Create styled container
     st.markdown(f'<div class="prediction-results {risk_class}">', unsafe_allow_html=True)
@@ -654,98 +667,75 @@ def display_prediction_result(title: str, data: Dict):
         else:
             st.markdown(f"### **Prediction:** {prediction}")
     
-    # Handle explanations with better formatting
-    explanations = data.get("explanations")
-    if explanations:
-        st.markdown("### 📊 **Key Contributing Factors:**")
-        
-        # Try to parse explanations if it's a string
-        if isinstance(explanations, str):
-            try:
-                import ast
-                explanations = ast.literal_eval(explanations)
-            except:
-                try:
-                    explanations = json.loads(explanations)
-                except:
-                    # If parsing fails, display as raw text
-                    st.write(explanations)
-                    explanations = None
-        
-        if isinstance(explanations, list):
-            # Parse the complex diabetes prediction format
-            for item in explanations:
-                if isinstance(item, dict):
-                    feature = item.get('feature', 'Unknown')
-                    value = item.get('value', 'N/A')
-                    impact = item.get('impact', 'neutral')
-                    importance = item.get('importance', 0)
-                    
-                    # Format feature name nicely
-                    feature_display = format_feature_name(feature)
-                    
-                    # Choose emoji and color based on impact
-                    impact_emoji = "⬆️" if impact == "increases" else ("⬇️" if impact == "decreases" else "➡️")
-                    
-                    # Create styled factor item
-                    st.markdown(f'<div class="factor-item">', unsafe_allow_html=True)
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    with col1:
-                        st.write(f"{impact_emoji} **{feature_display}:** {value}")
-                    with col2:
-                        st.write(f"Impact: {impact}")
-                    with col3:
-                        st.write(f"Weight: {importance:.3f}")
-                    st.markdown('</div>', unsafe_allow_html=True)
-        
-        elif isinstance(explanations, dict):
-            for factor, importance in explanations.items():
-                st.markdown(f'<div class="factor-item">', unsafe_allow_html=True)
-                st.write(f"• **{factor}:** {importance}")
-                st.markdown('</div>', unsafe_allow_html=True)
-        elif explanations:  # Only display if not None (failed parsing case handled above)
-            st.write(explanations)
+    # Styling function for dataframes
+    def highlight_impact(row):
+        if row['Impact on Risk'] == 'increases':
+            return ['background-color: #660000'] * len(row)
+        elif row['Impact on Risk'] == 'decreases':
+            return ['background-color: #004d00'] * len(row)
+        return [''] * len(row)
+
+    # Parse and display explanations
+    explanations_data = data.get("explanations")
+    if explanations_data:
+        # Handle nested structure
+        if isinstance(explanations_data, dict):
+            explanations_list = explanations_data.get("explanations")
+            top_factors_list = explanations_data.get("top_factors")
+            summary_text = explanations_data.get("summary")
+        else:
+            # Fallback for older format
+            explanations_list = explanations_data
+            top_factors_list = data.get("top_factors")
+            summary_text = data.get("summary")
+
+        # Display explanations in a table
+        if explanations_list:
+            st.markdown("### 📊 **Key Contributing Factors:**")
+            explanations = parse_json_string(explanations_list)
+            
+            if isinstance(explanations, list) and explanations:
+                df_explanations = pd.DataFrame(explanations)
+                df_explanations['feature'] = df_explanations['feature'].apply(format_feature_name)
+                
+                # Select and rename columns for display
+                display_cols = {
+                    'feature': 'Factor',
+                    'value': 'Value',
+                    'impact': 'Impact on Risk',
+                    'importance': 'Importance'
+                }
+                df_display = df_explanations[display_cols.keys()].rename(columns=display_cols)
+                
+                st.dataframe(df_display.style.apply(highlight_impact, axis=1), use_container_width=True)
+            elif explanations:
+                st.text(str(explanations))
+
+        # Display top factors in a table
+        if top_factors_list:
+            st.markdown("### 🎯 **Top Risk Factors:**")
+            top_factors = parse_json_string(top_factors_list)
+            
+            if isinstance(top_factors, list) and top_factors:
+                df_top_factors = pd.DataFrame(top_factors)
+                df_top_factors['feature'] = df_top_factors['feature'].apply(format_feature_name)
+                
+                # Select and rename columns for display
+                display_cols = {
+                    'feature': 'Factor',
+                    'value': 'Value',
+                    'impact': 'Impact on Risk'
+                }
+                df_display = df_top_factors[display_cols.keys()].rename(columns=display_cols)
+                
+                st.dataframe(df_display.style.apply(highlight_impact, axis=1), use_container_width=True)
+            elif top_factors:
+                st.text(str(top_factors))
     
-    # Handle top factors if available
-    top_factors = data.get("top_factors")
-    if top_factors:
-        st.markdown("### 🎯 **Top Risk Factors:**")
-        
-        # Try to parse top_factors if it's a string
-        if isinstance(top_factors, str):
-            try:
-                import ast
-                top_factors = ast.literal_eval(top_factors)
-            except:
-                try:
-                    top_factors = json.loads(top_factors)
-                except:
-                    # If parsing fails, display as raw text
-                    st.write(top_factors)
-                    top_factors = None
-        
-        if isinstance(top_factors, list):
-            for i, factor in enumerate(top_factors[:5], 1):
-                if isinstance(factor, dict):
-                    feature = factor.get('feature', 'Unknown')
-                    value = factor.get('value', 'N/A')
-                    impact = factor.get('impact', 'neutral')
-                    importance = factor.get('importance', 0)
-                    
-                    feature_display = format_feature_name(feature)
-                    impact_emoji = "⬆️" if impact == "increases" else ("⬇️" if impact == "decreases" else "➡️")
-                    
-                    st.markdown(f'<div class="factor-item">', unsafe_allow_html=True)
-                    st.write(f"{i}. {impact_emoji} **{feature_display}** (Value: {value}) - {impact} risk")
-                    st.markdown('</div>', unsafe_allow_html=True)
-        elif top_factors:  # Only display if not None
-            st.write(top_factors)
-    
-    # Handle summary if available
-    summary = data.get("summary")
-    if summary:
-        st.markdown("### 📝 **Summary:**")
-        st.info(summary)
+        # Display summary
+        if summary_text:
+            st.markdown("### 📝 **Summary:**")
+            st.info(summary_text)
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("---")
