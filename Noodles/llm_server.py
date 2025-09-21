@@ -4,7 +4,7 @@ import requests
 import time
 from typing import Dict, Any
 
-mcp = FastMCP("TIC")
+mcp = FastMCP("CDSX")
 def _to_int(val: Any, default: int | None = None) -> int:
     try:
         return int(str(val).strip())

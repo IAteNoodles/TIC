@@ -1,8 +1,8 @@
-# TIC (Technology in Healthcare) - Comprehensive Healthcare AI Platform
+# CDSX (Clinical Decision Support eXpert) - Comprehensive Healthcare AI Platform
 
 ## 🏥 Project Overview
 
-TIC is a comprehensive healthcare AI platform that integrates multiple cutting-edge technologies to revolutionize healthcare delivery in India. The platform addresses critical challenges in Indian healthcare including physician burnout, resource constraints, data privacy concerns, and accessibility issues through innovative AI-powered solutions.
+CDSX is a comprehensive healthcare AI platform that integrates multiple cutting-edge technologies to revolutionize healthcare delivery in India. The platform addresses critical challenges in Indian healthcare including physician burnout, resource constraints, data privacy concerns, and accessibility issues through innovative AI-powered solutions.
 
 ## 🎯 Vision & Mission
 
@@ -18,7 +18,7 @@ TIC is a comprehensive healthcare AI platform that integrates multiple cutting-e
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    TIC Healthcare Platform                      │
+│                    CDSX Healthcare Platform                     │
 ├─────────────────────────────────────────────────────────────────┤
 │  Frontend Layer                                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
@@ -53,7 +53,7 @@ TIC is a comprehensive healthcare AI platform that integrates multiple cutting-e
 ## 📁 Project Structure
 
 ```
-TIC/
+CDSX/
 ├── 📊 graphs.ipynb                 # Healthcare analytics and visualizations
 ├── 🔧 .env                        # Environment configuration
 ├── 📖 README_streamlit.md         # Streamlit chat client documentation
@@ -159,8 +159,8 @@ TIC/
 
 ```bash
 # Clone the repository
-git clone https://github.com/IAteNoodles/TIC.git
-cd TIC
+git clone https://github.com/IAteNoodles/CDSX.git
+cd CDSX
 
 # Create and activate virtual environment
 python -m venv venv
@@ -457,8 +457,8 @@ docker-compose up -d --scale chat-server=3
 ## 📞 Support & Contact
 
 ### Issues & Bug Reports
-- **GitHub Issues:** [Create an issue](https://github.com/IAteNoodles/TIC/issues)
-- **Discussion:** [GitHub Discussions](https://github.com/IAteNoodles/TIC/discussions)
+- **GitHub Issues:** [Create an issue](https://github.com/IAteNoodles/CDSX/issues)
+- **Discussion:** [GitHub Discussions](https://github.com/IAteNoodles/CDSX/discussions)
 
 ### Team
 - **Project Lead:** Souvik (IAteNoodles)
@@ -473,7 +473,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🎯 Impact & Vision
 
-TIC represents a paradigm shift in healthcare technology, addressing critical challenges in the Indian healthcare system through innovative AI solutions. By reducing physician burnout, improving diagnostic accuracy, and increasing accessibility, TIC aims to transform healthcare delivery for millions of patients across India.
+CDSX represents a paradigm shift in healthcare technology, addressing critical challenges in the Indian healthcare system through innovative AI solutions. By reducing physician burnout, improving diagnostic accuracy, and increasing accessibility, CDSX aims to transform healthcare delivery for millions of patients across India.
 
 **Key Impact Areas:**
 - **Physician Welfare:** Reducing administrative burden and burnout

@@ -70,7 +70,7 @@ Report preview: 'Patient data is incomplete for a diabetes diagnosis...'
 
 ### Starting the Frontend
 ```bash
-cd /home/anugrah-singh/Code/TIC/anugrah/doctor_assistant
+cd /home/anugrah-singh/Code/CDSX/anugrah/doctor_assistant
 streamlit run frontend/app.py
 ```
 

@@ -244,7 +244,6 @@ def render_patient_input():
                     st.session_state.diagnostic_reports = fetch_diagnostic_reports(patient_id)
                     if st.session_state.patient_data:
                         st.success(f"✅ Patient data loaded successfully!")
-                        st.balloons()  # Add celebration effect
                     else:
                         st.error("❌ Patient not found or no data available.")
             else:

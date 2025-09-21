@@ -129,7 +129,7 @@ logger.addHandler(_handler)
 # FastAPI setup
 # -------------
 
-app = FastAPI(title="TIC Chat API", version="1.0.0")
+app = FastAPI(title="CDSX Chat API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -180,7 +180,7 @@ def get_mcp_url() -> str:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data["servers"]["TIC"]["url"]
+        return data["servers"]["CDSX"]["url"]
     except Exception:
         # Final fallback to common default
         return "http://0.0.0.0:8005/mcp"

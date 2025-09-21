@@ -8,11 +8,11 @@ import requests
 
 API_URL = os.getenv("CHAT_API_URL", "http://127.0.0.1:8088/chat")
 
-st.set_page_config(page_title="TIC Chatbot", page_icon="💬", layout="centered")
+st.set_page_config(page_title="CDSX Chatbot", page_icon="💬", layout="centered")
 
 # Sidebar configuration
 with st.sidebar:
-    st.title("TIC Chatbot")
+    st.title("CDSX Chatbot")
     st.caption("FastAPI + MCP tools")
     api_url = st.text_input("API URL", value=API_URL)
     chat_type = st.selectbox("Preferred provider", ["gemini", "groq", "ollama"], index=0)
